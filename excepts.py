@@ -1,0 +1,2 @@
+class ezDNACError(Exception):
+    pass
