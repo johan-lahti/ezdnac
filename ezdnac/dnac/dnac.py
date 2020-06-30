@@ -246,8 +246,7 @@ class Dnac:
 
             for device in data:
                 if 'serialNumber' in device:
-                    if serialNumber in device['serialNumber']:
-                        return device
+                    return device
 
 
         # If hostname is used
