@@ -118,14 +118,25 @@ class Dnac:
         return data
 
     def id_from_serial(self, serialNumber):
-        switches = self.getAllDevices()
-        for switch in switches['response']:
-            if switch['serialNumber'] == serialNumber:
-                switchId = switch['id']
-        try:
-            return switchId
-        except KeyError:
-            return None
+        devices = self.getAllDevices()
+        for device in devices.get('response'):
+            if serialNumber in device.get('serialNumber'):
+                deviceId = device.get('id')
+                return deviceId
+
+        return None
+
+    def name_from_id(self, id:str) -> str:
+        """
+        Return a the name of a device in string format
+        """
+        devices = self.getAllDevices().get('response')
+        for device in devices:
+            if id == device.get('id'):
+                hostname = device.get('hostname')
+                return hostname
+        return None
+
 
     def getTemplates(self):
         endpoint = "template-programmer/project"
@@ -190,10 +201,6 @@ class Dnac:
         headers = {
             'x-auth-token': self.authToken
         }
- #       response = requests.request(
- #           "GET", url, headers=headers, data=payload, verify=self.verifySSL, timeout=self.timeout)
- #       data = json.loads(response.text)
-
 
         response = restcall('GET', self, endpoint)
         data = response
@@ -211,7 +218,6 @@ class Dnac:
                                serialNumber + ' not found in pnp.')
 
     def getInventoryDevies(self, **kwargs):
-
         # Setting attributes from kwargs
         if 'sn' in kwargs:
             serialNumber = kwargs['sn']
@@ -246,8 +252,9 @@ class Dnac:
 
             for device in data:
                 if 'serialNumber' in device:
-                    return device
-
+                    if device['serialNumber'] is not None:
+                        if serialNumber in device['serialNumber']:
+                            return device
 
         # If hostname is used
         elif hostname is not None:
@@ -257,6 +264,8 @@ class Dnac:
             for device in data:
                 if re.match(rf'{hostname}.*', device['hostname']):
                     return device
+        return None
+
 
     def pullTemplates(self, **kwargs):
         path = ""
@@ -270,18 +279,12 @@ class Dnac:
         except:
             pass
 
-        url = "https://" + self.ip + ":" + self.port + \
-            baseurl + "template-programmer/project"
-        headers = {
-            'x-auth-token': self.authToken,
-            'Content-Type': 'application/json',
-        }
-        response = requests.request(
-            "GET", url, headers=headers, verify=self.verifySSL, timeout=self.timeout)
-        data = json.loads(response.text)
+        endpoint = "template-programmer/project"
+
+        response = restcall('GET', self, endpoint)
         templateslist = []
         # Get the id of interesting templates:
-        for projects in data:
+        for projects in response:
             if projectName != None:
                 if (projects['name']) == projectName:
                     for template in projects['templates']:
@@ -294,22 +297,20 @@ class Dnac:
                     templates['id'] = template['id']
                     templateslist.append(templates)
 
+
         for template in templateslist:
-            url = "https://" + self.ip + ":" + self.port + baseurl + \
-                "template-programmer/template/" + template['id']
-            headers = {
-                'x-auth-token': self.authToken,
-                'Content-Type': 'application/json',
-            }
-            response = requests.request(
-                "GET", url, headers=headers, verify=self.verifySSL, timeout=self.timeout)
-            templateData = json.loads(response.text)
+            endpoint = f"template-programmer/template/{template['id']}"
+            print(endpoint)
+            templateData = restcall('GET', self, endpoint)
+
 
             # Create template path folder if not exists already
             if not os.path.exists(path):
                 os.mkdir(path)
 
             # Creates one subfolder per template, containting separate files for parameters and content
+            print(json.dumps(templateData,indent=4))
+
             templatePath = path + templateData['name']
             if not os.path.exists(templatePath):
                 os.mkdir(templatePath)
@@ -380,16 +381,8 @@ class Dnac:
                 projectName = templateFile['projectName']
 
                 # Check whats already existing, based on project/template tree name
-                url = "https://" + self.ip + ":" + self.port + \
-                    baseurl + "template-programmer/project/"
-                payload = {}
-                headers = {
-                    'x-auth-token': self.authToken,
-                    'Content-Type': 'application/json',
-                }
-                response = requests.request(
-                    "GET", url, headers=headers, data=payload, verify=self.verifySSL, timeout=self.timeout)
-                data = json.loads(response.text)
+                endpoint = "template-programmer/project/"
+                data = restcall('GET', self, endpoint)
                 templateExists = False
                 projectExists = False
                 for project in data:
@@ -459,38 +452,87 @@ class Dnac:
                         self.taskId = None
 
                 if templateExists == True:
+                    changed = False
                     # Since the template exists, PUT the file from directory to make sure the active template is same version.
                     print ("Template " + templateName +
-                           " already exists, versioning and updating.")
+                           " already exists, compare data")
 
-                    headers = {
-                        'x-auth-token': self.authToken,
-                        'Content-Type': 'application/json',
-                    }
+                    #Get the current data from dna-C
+                    template_endpoint = f"template-programmer/template/{templateId}"
+                    dnac_template = restcall('GET', self, template_endpoint)
 
-                    versionUrl = "https://" + self.ip + ":" + self.port + \
-                        baseurl + "template-programmer/template/version"
-                    versionPayload = {
-                        'comments': 'Updated with EZDNAC',
-                        'templateId': templateId
-                    }
-                    requests.post(versionUrl, headers=headers, json=versionPayload,
-                                  verify=self.verifySSL, timeout=self.timeout)
+                    # Check if content is matching.
+                    if dnac_template['templateContent'] == templateContents:
+                        print(f"Same Template Content in {templateName}")
 
-                    url = "https://" + self.ip + ":" + self.port + \
-                        baseurl + "template-programmer/template/"
-                    payload = templateFile
-                    payload['id'] = templateId
+                    else:
+                        print(f"Content update in {templateName}, updating.")
+                        changed = True
+                    """
+                    Matching each parameter from the file and compare with the 
+                    one in DNA-C
+                    """
 
-                    for params in payload['templateParams']:
-                        del params['id']
+                    # Placing all params in lists
+                    active_params = dnac_template['templateParams']
+                    file_params = templateFile['templateParams']
 
-                    for param in payload['templateParams']:
-                        if 'selection' in param:
-                            del param['selection']
+                    for file_parameter in file_params:
+                        param_differences = []
+                        file_param_name = file_parameter['parameterName']
 
-                    payload['templateContent'] = templateContents
+                        # Remove id from comparison
+                        if 'id' in file_parameter:
+                            del file_parameter['id']
 
-                    response = requests.request(
-                        "PUT", url, headers=headers, json=payload, verify=self.verifySSL, timeout=self.timeout)
-                    data = json.loads(response.text)
+                        for active_param in active_params:
+                            active_param_name = active_param['parameterName']
+
+                            # Remove id from comparison
+                            if 'id' in active_param:
+                                del active_param['id']
+
+                            # For each matching parameter, check all paramsdata:                            
+                            if active_param_name == file_param_name:
+                                for key, value in active_param.items():
+                                    if value != file_parameter[key]:
+                                        param_differences.append((key, value, file_parameter[key]))
+
+                    if len (param_differences) > 0:
+                        changed = True
+                        for param in param_differences:
+                            print(f"Template differs for parameter {param[0]}, live value: {param[1]} file value: {param[2]}")
+
+                    if changed == True:
+                        print("Updating..")
+
+                        # Version template first.
+                        versionEndpoint = "template-programmer/template/version"
+                        versionPayload = {
+                            'comments': 'Updated with EZDNAC',
+                            'templateId': templateId
+                        }
+                        # Restcall for template versioning
+                        restcall('POST', self, versionEndpoint, jsondata=versionPayload)
+
+                        #Update the current template:
+                        templateEndpoint = "template-programmer/template/"
+                        payload = templateFile
+                        payload['id'] = templateId
+
+                        for param in payload['templateParams']:
+                            if 'selection' in param:
+                                del param['selection']
+
+                        payload['templateContent'] = templateContents
+
+                        # Sending the updates to DNA-C
+                        restcall('PUT', self, templateEndpoint, jsondata=payload)
+
+                    # If nothing changed, do nothing
+                    elif changed == False:
+                        print("No parameter updated \nNo update done")
+
+                    print("\r\n")
+
+

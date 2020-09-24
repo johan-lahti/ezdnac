@@ -23,6 +23,7 @@ class Template():
         self.name = None
         self.all = False
         self.data = None
+        self.force = False
         self.params = None
         self.authToken = dnac.authToken
         self.dnacIP = dnac.ip
@@ -256,7 +257,7 @@ class Template():
                     payload['templateContent'] = str(templateContents)
 
                     data = restcall('POST', self.dnac, endpoint, json=payload)
-                    
+
                     try:
                         self.taskId = data['response']['taskId']
                     except:
@@ -294,4 +295,3 @@ class Template():
                     payload['templateContent'] = templateContents
 
                     data = restcall('PUT', self.dnac, endpoint, json=payload)
-

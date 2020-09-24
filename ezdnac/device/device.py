@@ -10,7 +10,6 @@ import os
 # Retreive switchId based on serialnumber
 class Device():
     def __init__(self, dnac, **kwargs):
-        self.collectionStatus = None
         self.dnac = dnac
         self.id = None
         self.hostname = None
@@ -19,6 +18,9 @@ class Device():
         self.deploymentId = None
         self.executionId = None
         self.taskId = None
+
+        PNPdevice = None
+        INVdevice = None
 
         if 'id' in kwargs:
             self.id = kwargs['id']
@@ -30,90 +32,112 @@ class Device():
             self.hostname = kwargs['hostname']
             self.initMethod = 'hostname'
 
+        # Make sure at least one argument is set to find the device
         if self.id is None and self.serialNumber is None and self.hostname is None:
             raise ezDNACError(
                 'No device argment found. Enter hostname, id or sn')
 
-        # if init method is id, the device must be in inventory. Populate all attributes:
-        if self.initMethod == 'id':
-            try:
-                self.state = "Provisioned"
-                INVdevices = self.dnac.getInventoryDevies(id=self.id)
-            except:
+        # if init method is id, the device must be in inventory.
+        if self.initMethod in 'id':
+
+            self.state = "Provisioned"
+            INVdevice = self.dnac.getInventoryDevies(id=self.id)
+            if INVdevice == None:
                 raise ezDNACError('device not found by id')
 
+        # if init method is hostname, the device must be in inventory.
         elif self.initMethod == 'hostname':
-            try:
-                INVdevices = self.dnac.getInventoryDevies(
-                    hostname=self.hostname)
-            except:
+
+            INVdevice = self.dnac.getInventoryDevies(hostname=self.hostname)
+            if INVdevice == None:
                 raise ezDNACError('device not found by hostname')
 
         # if method is sn, the device can be either in inventory or pnp, have to try both
         elif self.initMethod == 'sn':
 
             # Try inventory:
-            INVdevices = self.dnac.getInventoryDevies(sn=self.serialNumber)
-            if INVdevices is not None:
-                self.state = "Provisioned"
-                self.id = INVdevices['id']
-                self.serialNumber = INVdevices['serialNumber']
-                self.ip = INVdevices['managementIpAddress']
-                self.hostname = INVdevices['hostname']
-                self.platform = INVdevices['platformId']
-                self.softwareVersion = INVdevices['softwareVersion']
-                self.softwareType = INVdevices['softwareType']
-                self.collectionStatus = INVdevices['collectionStatus']
+            INVdevice = self.dnac.getInventoryDevies(sn=self.serialNumber)
+
+            if INVdevice == None:
+                PNPdevice = self.dnac.getPnpDevices(sn=self.serialNumber)
+
+                if PNPdevice == None:
+                    raise ezDNACError('device not found by serial Number')
+
+        if INVdevice is not None:
+            self.state = "Provisioned"
+            self.id = INVdevice['id']
+            self.platform = INVdevice['platformId']
+            for key, value in INVdevice.items():
+                setattr(self, key, value)
 
 
-        if self.state != "Provisioned" and self.initMethod == 'sn':
-            try:
-                # Otherwise try populate attributes via pnp:
-                PNPdevices = self.dnac.getPnpDevices(sn=self.serialNumber)
+        # If device is found in pnp inventory, populate it
+        if PNPdevice is not None:
+            self.id = PNPdevice['id']
+            for key, value in PNPdevice['deviceInfo'].items():
+                setattr(self, key, value)
 
-                # If stack, check first switch
-                if 'stackInfo' in PNPdevices['deviceInfo']:
-                    if 'stackMemberList' in PNPdevices['deviceInfo']['stackInfo']:
-                        if len(PNPdevices['deviceInfo']['stackInfo']['stackMemberList']) > 1:
-                            
-                            self.hostname = PNPdevices['deviceInfo']['name']
-                            self.id = PNPdevices['id']
-                            self.softwareType = PNPdevices['deviceInfo']['agentType']
-                            self.state = PNPdevices['deviceInfo']['state']
-                            self.platform = PNPdevices['deviceInfo']['pid']
 
-                            # Some attributes is picked from first switch in stack.                            
-                            stack1 = PNPdevices['deviceInfo']['stackInfo']['stackMemberList'][0]
-                            self.softwareVersion = stack1['softwareVersion']       
+            # If stack, check first switch
+            if 'stackInfo' in PNPdevice['deviceInfo']:
+                if 'stackMemberList' in PNPdevice['deviceInfo']['stackInfo']:
+                    if len(PNPdevice['deviceInfo']['stackInfo']['stackMemberList']) > 1:
+
+                        self.hostname = PNPdevice['deviceInfo']['name']
+                        self.id = PNPdevice['id']
+                        self.softwareType = PNPdevice['deviceInfo']['agentType']
+                        self.state = PNPdevice['deviceInfo']['state']
+                        self.platform = PNPdevice['deviceInfo']['pid']
+
+                        # Some attributes is picked from first switch in stack.
+                        stack1 = PNPdevice['deviceInfo']['stackInfo']['stackMemberList'][0]
+                        self.softwareVersion = stack1['softwareVersion']
+
                 else:
-                    self.id = PNPdevices['id']
-                    self.state = PNPdevices['state']
-                    self.hostname = PNPdevices['name']
-                    self.platform = PNPdevices['pid']
-                    self.softwareVersion = PNPdevices['softwareVersion']
-                    self.softwareType = PNPdevices['agentType']
-            except:
-                raise ezDNACError('device with serialNumber ' +
-                                  str(self.serialNumber) + ' not found')
-            try:
-                httpHeaders = PNPdevices['deviceInfo']['httpHeaders']
-                for header in httpHeaders:
-                    if header['key'] == 'clientAddress':
-                        self.ip = header['value']
-            except:
-                pass
+                    self.id = PNPdevice['id']
+                    self.state = PNPdevice['deviceInfo']['state']
+                    self.hostname = PNPdevice['deviceInfo']['name']
+                    self.platform = PNPdevice['deviceInfo']['pid']
+                    self.softwareVersion = PNPdevice['deviceInfo']['imageVersion']
+                    self.softwareType = PNPdevice['deviceInfo']['agentType']
+
+
+                try:
+                    httpHeaders = PNPdevice['deviceInfo']['httpHeaders']
+                    for header in httpHeaders:
+                        if header['key'] == 'clientAddress':
+                            self.ip = header['value']
+                except:
+                    pass
+
+    @property
+    def collectionStatus(self):
+        endpoint = f"network-device/{self.id}"
+        response = restcall('GET', self.dnac, endpoint).get('response')
+        self._collectionStatus = response.get('collectionStatus')
+        return self._collectionStatus
+
+
+    @collectionStatus.setter
+    def collectionStatus(self, string):
+        self._collectionStatus = string
+
 
     def updateAttributes(self):
         endpoint = f"network-device/{self.id}"
-        response = restcall('GET', self.dnac, endpoint)['response']
+        response = restcall('GET', self.dnac, endpoint).get('response')
 
-        self.serialNumber = response['serialNumber']
-        self.ip = response['managementIpAddress']
-        self.hostname = response['hostname']
-        self.platform = response['platformId']
-        self.softwareVersion = response['softwareVersion']
-        self.softwareType = response['softwareType']
-        self.collectionStatus = response['collectionStatus']
+        for key, value in response.items():
+            setattr(self, key, value)
+
+        try:
+            self.serialNumber = response['serialNumber'].split(',')
+            self.ip = response['managementIpAddress']
+            self.platform = response['platformId']
+            self.softwareVersion = response['softwareVersion']
+        except:
+            pass
 
         return None
 
@@ -129,7 +153,6 @@ class Device():
         connections = {}
         links = []
         for link in data['response']['links']:
-
             try:
                 connections['sourcenode'] = link['source']
                 connections['remotenode'] = link['target']
@@ -148,19 +171,17 @@ class Device():
         connections = {}
         links = []
         for link in data['response']['links']:
-            try:
-                if link['source'] == self.id:
-                    connections['remotenode'] = link['target']
-                    connections['remoteif'] = link['endPortName']
-                    connections['localif'] = link['startPortName']
-                    links.append(dict(connections))
-                elif link['target'] == self.id:
-                    connections['remotenode'] = link['source']
-                    connections['remoteif'] = link['startPortName']
-                    connections['localif'] = link['endPortName']
-                    links.append(dict(connections))
-            except:
-                pass
+            if link['source'] == self.id:
+                print(link)
+                connections['remotenode'] = link['target']
+                connections['remoteif'] = link['endPortName']
+                connections['localif'] = link['startPortName']
+                links.append(dict(connections))
+            elif link['target'] == self.id:
+                connections['remotenode'] = link['source']
+                connections['remoteif'] = link['startPortName']
+                connections['localif'] = link['endPortName']
+                links.append(dict(connections))
         ret = links
         return ret
 
@@ -181,6 +202,7 @@ class Device():
         endpoint = "template-programmer/template/deploy"
 
         payload = {
+            "forcePushTemplate": template.force,
             "templateId": template.id,
             "targetInfo": [
                 {
@@ -191,6 +213,7 @@ class Device():
             ]}
 
         response = restcall('POST', self.dnac, endpoint, jsondata=payload)
+
 
         # If error occurs, no id
         if 'response' in response and 'errorCode' in response['response']:
@@ -233,7 +256,7 @@ class Device():
             data['message'] = response
 
         return data
- 
+
 
     def deployTemplateStatus(self, **kwargs):
         if 'id' in kwargs:
@@ -255,7 +278,7 @@ class Device():
 
     def deployTemplateReport(self, **kwargs):
         if 'id' in kwargs:
-            self.deploymentId = kwargs['id']        
+            self.deploymentId = kwargs['id']
 
         endpoint = f"template-programmer/template/deploy/status/{self.deploymentId['deploymentId']}"
         response = restcall('GET', self.dnac, endpoint)
@@ -317,13 +340,11 @@ class Device():
 
     def getModules(self):
         endpoint = f'network-device/module?deviceId={self.id}'
-        data = restcall('GET', self.dnac, endpoint)
+        modules = restcall('GET', self.dnac, endpoint)
 
-        modules = data['modules']
-        self.modules = modules
-
+        self.modules = modules.get('response')
         switches = []
-        for module in modules:
+        for module in self.modules:
             name = module['name']
             switch = str((re.findall(r'Switch \d', name))).strip("[']")
             switches.append(switch)
@@ -333,14 +354,30 @@ class Device():
 
     def claimDevice(self, siteId, **kwargs):
         endpoint = "onboarding/pnp-device/site-claim"
-        
-        if 'template' in kwargs:
+        configParams = []
+
+        if 'payload' in kwargs:
+            payload = kwargs['payload']
+
+        elif 'template' in kwargs:
+            template = kwargs['template']
+            for key, value in template.params.items():
+                param = {"key": key, "value": value}
+                configParams.append(param)
+
             payload = {
                 "siteId": siteId,
                 "deviceId": self.id,
                 "type": "Default",
-                "imageInfo": {"imageId": "None", "skip": "true"},
-                "configInfo": {"configId": "", "configParameters": [kwargs['template'].params]}
+                "imageInfo": {
+                    "imageId": "None",
+                    "skip": True
+                },
+                "configInfo": {
+                    "saveToStartUp": True,
+                    "connLossRollBack": True,
+                    "configId": template.id,
+                    "configParameters": configParams}
             }
         else:
             payload = {
@@ -351,7 +388,7 @@ class Device():
                 "configInfo": {"configId": "", "configParameters": []}
             }
 
-        print(payload)
+        print(json.dumps(payload, indent=4))
         data = restcall('POST', self.dnac, endpoint, jsondata=payload)
         print(data)
         try:
@@ -366,7 +403,7 @@ class Device():
         payload = f'["{self.id}"]\n\n'
         data = restcall('PUT', self.dnac, endpoint, data=payload, baseurl=baseurl)
 
-        self.taskId = data['response']['taskId']
+        self.taskId = data.get('response').get('taskId')
         return data
 
     def getTaskStatus(self, **kwargs):
