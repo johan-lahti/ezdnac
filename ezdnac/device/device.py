@@ -5,9 +5,7 @@ import json
 import re
 import os
 
-
 # When initialized, populate device parameters:
-# Retreive switchId based on serialnumber
 class Device():
     def __init__(self, dnac, **kwargs):
         self.dnac = dnac
@@ -231,7 +229,7 @@ class Device():
             return data
 
         # This is how it is solved with regex instead.
-        if 'deploymentId' in response and type(response['deploymentId']) is not int:
+        if 'deploymentId' in response and type(response['deploymentId']) !=  int:
             data['message'] = 'Id found with regex, broken response'
 
             # Testing if id is in response:
